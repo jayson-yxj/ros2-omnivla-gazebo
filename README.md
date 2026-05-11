@@ -1,6 +1,8 @@
 # OmniVLA Gazebo Validation
 
 This workspace now runs a real OmniVLA policy in Gazebo with a low-center-of-mass differential-drive camera robot.
+<img width="480" height="240" alt="2026-05-11T11_56_31 464Z-243109" src="https://github.com/user-attachments/assets/b396d6bf-5b67-4d2b-bf31-03271c35be8c" />
+
 
 - Policy: official OmniVLA `NHirose/omnivla-original`
 - Simulator: Gazebo Classic + AWS RoboMaker Small House + `stable_diff_cam`
