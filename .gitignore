@@ -1,0 +1,29 @@
+# ROS 2 build outputs
+/build/
+/install/
+/log/
+
+# Large local assets and downloaded checkpoints
+/models/
+
+# Third-party source trees are prepared by scripts/prepare_third_party.sh
+/third_party/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Runtime logs and temporary files
+*.log
+/tmp/
