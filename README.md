@@ -1,16 +1,29 @@
-# OmniVLA Gazebo Validation
+# ros2-omnivla-gazebo
 
-This workspace now runs a real OmniVLA policy in Gazebo with a low-center-of-mass differential-drive camera robot.
+ROS 2 Humble workspace for validating OmniVLA in Gazebo Classic with a differential-drive indoor robot.
 <img width="480" height="240" alt="2026-05-11T11_56_31 464Z-243109" src="https://github.com/user-attachments/assets/b396d6bf-5b67-4d2b-bf31-03271c35be8c" />
 
+This repository keeps the experiment boundary explicit:
 
-- Policy: official OmniVLA `NHirose/omnivla-original`
-- Simulator: Gazebo Classic + AWS RoboMaker Small House + `stable_diff_cam`
-- Inputs: `/camera/image_raw`, `/odom`, language instruction, and a goal pose
-- Output: OmniVLA action chunk -> velocity controller -> `/cmd_vel`
-- Useful topics: `/vl_nav/omnivla/status`, `/vl_nav/omnivla/waypoints`, `/vl_nav/omnivla/annotated_image`
+- **OmniVLA** is the action and short-horizon trajectory policy.
+- **YOLO-World** is only used for open-vocabulary visual grounding and stop evidence in visible object-goal tests.
+- The auxiliary `target_servo` route is only a detector/control debug path. It is not the main VLN result.
 
-The ROS adapter is not a semantic-goal mock. It loads the official OmniVLA checkpoint and uses the official `inference/run_omnivla.py` model path.
+## What is in this workspace
+
+- Simulator: Gazebo Classic
+- Indoor world: AWS RoboMaker Small House
+- Robot: custom `stable_diff_cam`
+- Policy: official `NHirose/omnivla-original`
+- Object grounding: `yolov8s-worldv2.pt`
+
+Core ROS inputs and outputs:
+
+- Input: `/camera/image_raw`
+- Input: `/odom`
+- Input: `/vl_nav/omnivla/task`
+- Output: `/cmd_vel`
+- Status: `/vl_nav/omnivla/status`
 
 ## Build
 
@@ -22,7 +35,7 @@ colcon build --merge-install --symlink-install
 source install/setup.bash
 ```
 
-Large generated or downloaded folders are intentionally not tracked by git:
+Large generated or downloaded directories are intentionally untracked:
 
 ```text
 build/
@@ -32,17 +45,21 @@ models/
 third_party/
 ```
 
-`scripts/prepare_third_party.sh` clones the required upstream repositories and applies the small OmniVLA inference-import patch used by this workspace.
+## Models
 
-## Download OmniVLA
-
-The full checkpoint is stored at:
+OmniVLA checkpoint:
 
 ```text
 models/omnivla/omnivla-original
 ```
 
-If it needs to be re-downloaded:
+YOLO-World checkpoint:
+
+```text
+models/yolov8s-worldv2.pt
+```
+
+If OmniVLA needs to be re-downloaded:
 
 ```bash
 export VLN_PROJECT_ROOT=/root/Desktop/vln_project
@@ -52,45 +69,26 @@ python3 src/vlnav_gazebo/scripts/download_omnivla_assets.py \
   --max-workers 1
 ```
 
-The script routes HuggingFace API traffic through Clash and lets the large `cas-bridge.xethub.hf.co` file downloads go direct, which was required in this container.
+## Main Modes
 
-## Run
+### 1. OmniVLA with pose goal
 
-Headless validation:
+This is the most stable baseline in the workspace.
 
-```bash
-GUI=false \
-INSTRUCTION="move toward the goal" \
-GOAL_X=2.79818558693 \
-GOAL_Y=-3.52509260178 \
-GOAL_YAW=-1.59079641132 \
-SPAWN_X=5.18359947205 \
-SPAWN_Y=1.49744713306 \
-SPAWN_YAW=1.32731997641 \
-MAX_LINEAR=0.08 \
-MAX_ANGULAR=0.12 \
-INFER_HZ=1.0 \
-src/vlnav_gazebo/scripts/run_omnivla_demo.sh
-```
-
-With Gazebo GUI:
+Run:
 
 ```bash
-src/vlnav_gazebo/scripts/run_omnivla_demo.sh
-```
-
-With RViz trajectory visualization:
-
-```bash
+cd /root/Desktop/vln_project
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 GUI=true RVIZ=true src/vlnav_gazebo/scripts/run_omnivla_demo.sh
 ```
 
-The robot now waits for an explicit task. In another terminal:
+Send a named-place task:
 
 ```bash
-source /opt/ros/humble/setup.bash
-source /root/Desktop/vln_project/install/setup.bash
-python3 src/vlnav_gazebo/scripts/send_omnivla_task.py --task "去到厨房然后停下来"
+python3 src/vlnav_gazebo/scripts/send_omnivla_task.py \
+  --task "去到厨房然后停下来"
 ```
 
 Or send an explicit pose goal:
@@ -103,60 +101,136 @@ python3 src/vlnav_gazebo/scripts/send_omnivla_task.py \
   --goal-yaw -1.59079641132
 ```
 
-Natural-language place names are grounded by a Small House semantic landmark table in `send_omnivla_task.py`; this keeps the experiment reproducible while still sending language to OmniVLA. Known places include `kitchen`, `living_room`, `dining_area`, and `bedroom`.
+Known named places in `send_omnivla_task.py`:
 
-Stop the active task:
+- `kitchen`
+- `living_room`
+- `dining_area`
+- `bedroom`
+
+In this route the OmniVLA input is:
+
+```text
+current image + odom-derived relative pose goal + optional language instruction
+```
+
+### 2. OmniVLA with visual object grounding
+
+This route is for visible object-goal experiments such as:
+
+```text
+Move to the trash can and then stop
+Find the fridge and then stop
+```
+
+Run:
+
+```bash
+cd /root/Desktop/vln_project
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+GUI=true RVIZ=true src/vlnav_gazebo/scripts/run_omnivla_visual_goal_demo.sh
+```
+
+Send a task:
+
+```bash
+python3 src/vlnav_gazebo/scripts/send_omnivla_task.py \
+  --language-only \
+  --task "Move to the trash can and then stop"
+```
+
+Example for fridge:
+
+```bash
+python3 src/vlnav_gazebo/scripts/send_omnivla_task.py \
+  --language-only \
+  --task "Find the fridge and then stop"
+```
+
+Pipeline:
+
+```text
+Gazebo camera + instruction
+-> YOLO-World open-vocabulary detection
+-> grounded local visual goal pose
+-> OmniVLA image + language + grounded pose
+-> OmniVLA action chunk / waypoint
+-> /cmd_vel
+```
+
+Important behavior:
+
+- The task publisher now sends an explicit `target_text` when it can infer one from the instruction.
+- YOLO-World only uses detections with `score >= 0.55` and sufficient area for control and stop logic.
+- Lower-score detections are still shown in RViz for debugging, but they do not control the robot.
+- When the target family changes, for example `trash can -> fridge`, the detector now resets and reloads the YOLO-World model. This avoids the GPU class-switch crash seen with in-place vocabulary changes.
+
+This route is still **not full semantic exploration**. If the target is not visible, the system does not build a semantic map or perform frontier exploration.
+
+## Useful Commands
+
+Stop OmniVLA:
 
 ```bash
 python3 src/vlnav_gazebo/scripts/stop_omnivla_task.py
 ```
 
-Direct launch:
-
-```bash
-ros2 launch vlnav_gazebo omnivla_gazebo.launch.py \
-  gui:=true \
-  instruction:="move toward the goal" \
-  spawn_x:=5.18359947205 \
-  spawn_y:=1.49744713306 \
-  spawn_yaw:=1.32731997641 \
-  goal_x:=2.79818558693 \
-  goal_y:=-3.52509260178 \
-  goal_yaw:=-1.59079641132 \
-  max_linear:=0.08 \
-  max_angular:=0.12 \
-  infer_hz:=1.0 \
-  publish_cmd_vel:=true \
-  autostart_task:=false
-```
-
-Monitor:
+Monitor status:
 
 ```bash
 ros2 topic echo /vl_nav/omnivla/status
 ros2 topic echo /vl_nav/omnivla/waypoints
-ros2 topic echo /vl_nav/omnivla/executed_path
-ros2 topic echo /vl_nav/omnivla/predicted_path
-ros2 topic echo /vl_nav/omnivla/predicted_path_marker
-ros2 topic echo /cmd_vel
+ros2 topic echo /vl_nav/target_detection
+ros2 topic echo /vl_nav/detections
+```
+
+Image debugging:
+
+```bash
+ros2 run rqt_image_view rqt_image_view /vl_nav/annotated_image
 ros2 run rqt_image_view rqt_image_view /vl_nav/omnivla/annotated_image
 ```
 
+## RViz
+
+The default RViz configuration shows:
+
+- executed path
+- predicted short-horizon OmniVLA path
+- YOLO annotated image
+- OmniVLA annotated image
+
+## Auxiliary Target Servo
+
+This mode exists only for debugging detection and base control:
+
+```bash
+GUI=true src/vlnav_gazebo/scripts/run_target_servo_demo.sh
+```
+
+Send a task:
+
+```bash
+python3 src/vlnav_gazebo/scripts/send_target_servo_task.py \
+  --task "Move to the trash can and then stop"
+```
+
+This is not the main OmniVLA/VLN path.
+
 ## Verified
 
-- Official OmniVLA repo cloned under `third_party/OmniVLA`
+- Official OmniVLA repository cloned under `third_party/OmniVLA`
 - Official `NHirose/omnivla-original` checkpoint downloaded
-- `define_model()` loads successfully
-- Sample OmniVLA forward pass outputs an 8-step action chunk
-- Gazebo headless launches the low-center-of-mass `stable_diff_cam`
-- Default Gazebo world is AWS RoboMaker Small House, with spawn and goal taken from its route file
-- The robot stays idle until `/vl_nav/omnivla/task` receives a task
-- RViz can show executed trajectory and OmniVLA predicted short-horizon trajectory
-- OmniVLA ROS node consumes real Gazebo camera and odom
-- `publish_cmd_vel:=true` publishes velocity commands to the Gazebo diff-drive plugin
+- OmniVLA ROS node loads and publishes `/cmd_vel`
+- Gazebo launches the custom `stable_diff_cam`
+- RViz shows OmniVLA trajectory overlays and detector overlays
+- Visual object-goal task publishing now includes explicit `target_text`
+- YOLO-World target-family switching now recovers by model reload instead of crashing on GPU
 
-## Notes
+## Known limitations
 
-The OmniVLA repository was patched locally only to remove eager package-level imports that pulled training/RLDS dependencies into inference. The actual model loading and forward path still use the official OmniVLA inference modules.
-
-OpenTrackVLA and YOLO-World files remain in the workspace as auxiliary experiments and smoke tests, but the main route is now OmniVLA.
+- OmniVLA language-only mode is not a complete indoor exploration system.
+- Visual object-goal behavior still depends on whether YOLO-World can recognize the Gazebo asset with the chosen target vocabulary.
+- Arrival for object-goal tasks is based on image geometry, not metric depth sensing.
+- Do not run multiple nodes that publish `/cmd_vel` at the same time unless you are intentionally testing arbitration.

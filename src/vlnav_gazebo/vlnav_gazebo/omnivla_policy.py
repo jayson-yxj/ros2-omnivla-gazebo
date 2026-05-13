@@ -45,6 +45,23 @@ class OmniVLAPolicy(Node):
         self.declare_parameter('use_pose_goal', True)
         self.declare_parameter('use_language_goal', True)
         self.declare_parameter('use_image_goal', False)
+        self.declare_parameter('use_visual_goal_grounding', False)
+        self.declare_parameter('visual_goal_detection_topic', '/vl_nav/target_detection')
+        self.declare_parameter('visual_goal_hfov_rad', 2.094395102)
+        self.declare_parameter('visual_goal_range_scale', 0.45)
+        self.declare_parameter('visual_goal_min_range', 0.6)
+        self.declare_parameter('visual_goal_max_range', 4.0)
+        self.declare_parameter('visual_goal_timeout_sec', 1.0)
+        self.declare_parameter('visual_goal_stop_area', 0.11)
+        self.declare_parameter('visual_goal_stop_center_error', 0.16)
+        self.declare_parameter('visual_goal_stop_bottom_y', 0.78)
+        self.declare_parameter('use_visual_final_approach', True)
+        self.declare_parameter('visual_final_approach_min_area', 0.05)
+        self.declare_parameter('visual_final_approach_max_linear', 0.06)
+        self.declare_parameter('visual_final_approach_max_angular', 0.18)
+        self.declare_parameter('visual_final_approach_center_kp', 0.55)
+        self.declare_parameter('visual_final_approach_center_deadband', 0.05)
+        self.declare_parameter('visual_final_approach_slow_area', 0.08)
         self.declare_parameter('infer_hz', 0.33)
         self.declare_parameter('device', 'cuda:0')
         self.declare_parameter('waypoint_index', 4)
@@ -64,10 +81,16 @@ class OmniVLAPolicy(Node):
         self.active_goal_x = self._float_param('goal_x')
         self.active_goal_y = self._float_param('goal_y')
         self.active_goal_yaw = self._float_param('goal_yaw')
+        self.active_use_pose_goal = self._bool_param('use_pose_goal')
+        self.active_use_language_goal = self._bool_param('use_language_goal')
+        self.active_use_image_goal = self._bool_param('use_image_goal')
         self.active_stop_at_goal = self._bool_param('stop_at_goal')
         self.active_goal_tolerance = self._float_param('goal_tolerance')
         self.task_active = self._bool_param('autostart_task')
         self.idle_status_published = False
+        self.visual_detection: Optional[dict] = None
+        self.visual_detection_time = 0.0
+        self.visual_goal_available = False
         self.executed_path = Path()
         self.executed_path.header.frame_id = 'odom'
         self.model_loaded = False
@@ -92,6 +115,12 @@ class OmniVLAPolicy(Node):
             Odometry, self.get_parameter('odom_topic').value, self._on_odom, 20
         )
         self.task_sub = self.create_subscription(String, '/vl_nav/omnivla/task', self._on_task, 10)
+        self.visual_detection_sub = self.create_subscription(
+            String,
+            self.get_parameter('visual_goal_detection_topic').value,
+            self._on_visual_detection,
+            10,
+        )
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_vel_topic').value, 10)
         self.status_pub = self.create_publisher(String, '/vl_nav/omnivla/status', 10)
         self.waypoints_pub = self.create_publisher(Float32MultiArray, '/vl_nav/omnivla/waypoints', 10)
@@ -146,6 +175,11 @@ class OmniVLAPolicy(Node):
             self.active_goal_x = float(payload.get('goal_x', self.active_goal_x))
             self.active_goal_y = float(payload.get('goal_y', self.active_goal_y))
             self.active_goal_yaw = float(payload.get('goal_yaw', self.active_goal_yaw))
+            self.active_use_pose_goal = self._json_bool(payload.get('use_pose_goal', self.active_use_pose_goal))
+            self.active_use_language_goal = self._json_bool(
+                payload.get('use_language_goal', self.active_use_language_goal)
+            )
+            self.active_use_image_goal = self._json_bool(payload.get('use_image_goal', self.active_use_image_goal))
             self.active_stop_at_goal = self._json_bool(payload.get('stop_at_goal', self.active_stop_at_goal))
             self.active_goal_tolerance = float(payload.get('goal_tolerance', self.active_goal_tolerance))
         except json.JSONDecodeError:
@@ -153,11 +187,18 @@ class OmniVLAPolicy(Node):
 
         self.task_active = True
         self.idle_status_published = False
+        if not self._bool_param('use_visual_goal_grounding'):
+            self.visual_detection = None
+            self.visual_detection_time = 0.0
+            self.visual_goal_available = False
         self.executed_path.poses.clear()
         self.get_logger().info(
             'Accepted OmniVLA task: '
             f'instruction={self.active_instruction!r}, '
-            f'goal=({self.active_goal_x:.3f}, {self.active_goal_y:.3f}, {self.active_goal_yaw:.3f})'
+            f'goal=({self.active_goal_x:.3f}, {self.active_goal_y:.3f}, {self.active_goal_yaw:.3f}), '
+            f'use_pose_goal={self.active_use_pose_goal}, '
+            f'use_language_goal={self.active_use_language_goal}, '
+            f'use_image_goal={self.active_use_image_goal}'
         )
         self._publish_status(
             'task_active',
@@ -166,10 +207,26 @@ class OmniVLAPolicy(Node):
                 'goal_x': self.active_goal_x,
                 'goal_y': self.active_goal_y,
                 'goal_yaw': self.active_goal_yaw,
+                'use_pose_goal': self.active_use_pose_goal,
+                'use_language_goal': self.active_use_language_goal,
+                'use_image_goal': self.active_use_image_goal,
                 'stop_at_goal': self.active_stop_at_goal,
                 'goal_tolerance': self.active_goal_tolerance,
             },
         )
+
+    def _on_visual_detection(self, msg: String):
+        if not self._bool_param('use_visual_goal_grounding'):
+            return
+        try:
+            detection = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(detection, dict):
+            return
+        self.visual_detection = detection
+        self.visual_detection_time = time.time()
+        self._update_visual_goal_from_detection(detection)
 
     def _tick(self):
         if not self.task_active:
@@ -180,7 +237,32 @@ class OmniVLAPolicy(Node):
             return
         if self.latest_rgb is None or self.pose_xy_yaw is None:
             return
-        if self.active_stop_at_goal and self._distance_to_goal() <= self.active_goal_tolerance:
+        if self._visual_goal_reached():
+            self._deactivate_task('visual_goal_reached')
+            return
+        if self._should_use_visual_final_approach():
+            twist = self._visual_final_approach_twist()
+            if self._bool_param('publish_cmd_vel'):
+                self.cmd_pub.publish(twist)
+            self._publish_status(
+                'visual_final_approach',
+                {
+                    'active_instruction': self.active_instruction,
+                    'linear_x': twist.linear.x,
+                    'angular_z': twist.angular.z,
+                    'visual_goal_available': self.visual_goal_available,
+                    'goal_x': self.active_goal_x,
+                    'goal_y': self.active_goal_y,
+                    'goal_yaw': self.active_goal_yaw,
+                },
+            )
+            return
+        if (
+            self.active_use_pose_goal
+            and not self._bool_param('use_visual_goal_grounding')
+            and self.active_stop_at_goal
+            and self._distance_to_goal() <= self.active_goal_tolerance
+        ):
             self._deactivate_task('goal_reached')
             return
         if not self.model_loaded:
@@ -202,11 +284,18 @@ class OmniVLAPolicy(Node):
             self._publish_status(
                 'ok',
                 {
-                    'instruction': self.get_parameter('instruction').value,
                     'active_instruction': self.active_instruction,
                     'linear_x': twist.linear.x,
                     'angular_z': twist.angular.z,
                     'waypoint_index': self._int_param('waypoint_index'),
+                    'use_pose_goal': self.active_use_pose_goal,
+                    'effective_use_pose_goal': self._effective_use_pose_goal(),
+                    'use_language_goal': self.active_use_language_goal,
+                    'use_image_goal': self.active_use_image_goal,
+                    'visual_goal_available': self.visual_goal_available,
+                    'goal_x': self.active_goal_x,
+                    'goal_y': self.active_goal_y,
+                    'goal_yaw': self.active_goal_yaw,
                 },
             )
         except Exception as exc:
@@ -279,7 +368,7 @@ class OmniVLAPolicy(Node):
         current_image_pil = PILImage.fromarray(self.latest_rgb.astype(np.uint8)).convert('RGB')
         goal_pose = self._goal_pose_vector()
         instruction = self.active_instruction
-        lan_inst = instruction if self._bool_param('use_language_goal') else 'xxxx'
+        lan_inst = instruction if self.active_use_language_goal else 'xxxx'
 
         batch = self.inference_helper.data_transformer_omnivla(
             current_image_pil,
@@ -314,11 +403,14 @@ class OmniVLAPolicy(Node):
 
     def _set_omnivla_modality_globals(self):
         self.omni.satellite = False
-        self.omni.pose_goal = self._bool_param('use_pose_goal')
-        self.omni.image_goal = self._bool_param('use_image_goal')
-        self.omni.lan_prompt = self._bool_param('use_language_goal')
+        self.omni.pose_goal = self._effective_use_pose_goal()
+        self.omni.image_goal = self.active_use_image_goal
+        self.omni.lan_prompt = self.active_use_language_goal
 
     def _goal_pose_vector(self) -> np.ndarray:
+        if not self._effective_use_pose_goal():
+            return np.zeros(4, dtype=np.float32)
+
         cur_x, cur_y, cur_yaw = self.pose_xy_yaw
         goal_x = self.active_goal_x
         goal_y = self.active_goal_y
@@ -341,6 +433,87 @@ class OmniVLAPolicy(Node):
             math.cos(goal_yaw - cur_yaw),
             math.sin(goal_yaw - cur_yaw),
         ], dtype=np.float32)
+
+    def _effective_use_pose_goal(self) -> bool:
+        return self.active_use_pose_goal or (
+            self._bool_param('use_visual_goal_grounding') and self._visual_goal_is_fresh()
+        )
+
+    def _visual_goal_is_fresh(self) -> bool:
+        if not self.visual_goal_available:
+            return False
+        return time.time() - self.visual_detection_time <= self._float_param('visual_goal_timeout_sec')
+
+    def _update_visual_goal_from_detection(self, detection: dict):
+        if self.pose_xy_yaw is None:
+            return
+        cur_x, cur_y, cur_yaw = self.pose_xy_yaw
+        center_x = float(detection.get('center_x_norm', 0.5))
+        area = max(1e-4, float(detection.get('area_norm', 0.0)))
+        hfov = self._float_param('visual_goal_hfov_rad')
+        bearing = (0.5 - center_x) * hfov
+
+        target_range = self._float_param('visual_goal_range_scale') / math.sqrt(area)
+        target_range = float(np.clip(
+            target_range,
+            self._float_param('visual_goal_min_range'),
+            self._float_param('visual_goal_max_range'),
+        ))
+
+        rel_forward = max(0.25, target_range * math.cos(bearing))
+        rel_left = target_range * math.sin(bearing)
+        self.active_goal_x = cur_x + rel_forward * math.cos(cur_yaw) - rel_left * math.sin(cur_yaw)
+        self.active_goal_y = cur_y + rel_forward * math.sin(cur_yaw) + rel_left * math.cos(cur_yaw)
+        self.active_goal_yaw = math.atan2(self.active_goal_y - cur_y, self.active_goal_x - cur_x)
+        self.visual_goal_available = True
+
+    def _visual_goal_reached(self) -> bool:
+        if not self._bool_param('use_visual_goal_grounding') or self.visual_detection is None:
+            return False
+        if not self._visual_goal_is_fresh():
+            return False
+        area = float(self.visual_detection.get('area_norm', 0.0))
+        center_error = abs(float(self.visual_detection.get('center_x_norm', 0.5)) - 0.5)
+        bottom_y = float(self.visual_detection.get('bottom_y_norm', 0.0))
+        return (
+            area >= self._float_param('visual_goal_stop_area')
+            and center_error <= self._float_param('visual_goal_stop_center_error')
+            and bottom_y >= self._float_param('visual_goal_stop_bottom_y')
+        )
+
+    def _should_use_visual_final_approach(self) -> bool:
+        if not self._bool_param('use_visual_final_approach'):
+            return False
+        if self.visual_detection is None or not self._visual_goal_is_fresh():
+            return False
+        return float(self.visual_detection.get('area_norm', 0.0)) >= self._float_param('visual_final_approach_min_area')
+
+    def _visual_final_approach_twist(self) -> Twist:
+        twist = Twist()
+        if self.visual_detection is None:
+            return twist
+
+        center_x = float(self.visual_detection.get('center_x_norm', 0.5))
+        area = float(self.visual_detection.get('area_norm', 0.0))
+        error = center_x - 0.5
+        deadband = self._float_param('visual_final_approach_center_deadband')
+        kp = self._float_param('visual_final_approach_center_kp')
+        max_angular = self._float_param('visual_final_approach_max_angular')
+        max_linear = self._float_param('visual_final_approach_max_linear')
+        slow_area = self._float_param('visual_final_approach_slow_area')
+        stop_area = self._float_param('visual_goal_stop_area')
+
+        if abs(error) > deadband:
+            twist.angular.z = float(np.clip(-kp * error, -max_angular, max_angular))
+
+        if abs(error) <= 0.22:
+            if area < slow_area:
+                twist.linear.x = max_linear
+            else:
+                scale = max(0.2, (stop_area - area) / max(1e-3, stop_area - slow_area))
+                twist.linear.x = max_linear * scale
+
+        return twist
 
     def _waypoints_to_twist(self, waypoints: np.ndarray) -> Twist:
         twist = Twist()

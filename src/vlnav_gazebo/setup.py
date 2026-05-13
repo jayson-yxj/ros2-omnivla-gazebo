@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'yolo_world_detector = vlnav_gazebo.yolo_world_detector:main',
+            'target_servo = vlnav_gazebo.target_servo:main',
             'scan_for_target = vlnav_gazebo.scan_for_target:main',
             'opentrackvla_policy = vlnav_gazebo.opentrackvla_policy:main',
             'omnivla_policy = vlnav_gazebo.omnivla_policy:main',

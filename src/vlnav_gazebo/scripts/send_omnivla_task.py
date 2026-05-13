@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import re
 import time
 
 from ros_python_guard import ensure_ros_python
@@ -41,6 +42,21 @@ PLACES = {
     },
 }
 
+TARGET_GROUPS = (
+    (('trash can', 'trash bin', 'garbage bin', 'waste bin', 'bin', 'dustbin', 'wastebasket', '垃圾桶'), 'trash can'),
+    (('chair', 'stool', 'seat', '椅子'), 'chair'),
+    (('table', 'desk', 'coffee table', 'dining table', '桌子'), 'table'),
+    (('fridge', 'refrigerator', 'icebox', 'freezer', '冰箱'), 'fridge'),
+    (('cabinet', 'cupboard', 'locker', 'sideboard', '柜子', '櫃子'), 'cabinet'),
+    (('sofa', 'couch', '沙发', '沙發'), 'sofa'),
+    (('bed', '床'), 'bed'),
+    (('plant', 'potted plant', '盆栽', '植物'), 'plant'),
+    (('door', '门', '門'), 'door'),
+    (('television', 'tv', 'monitor', '电视', '電視'), 'television'),
+    (('sink', 'washbasin', 'basin', '水槽'), 'sink'),
+    (('microwave', 'oven', 'stove', 'cooktop', '炉灶', '爐灶'), 'microwave'),
+)
+
 
 def infer_place(text: str):
     lowered = text.lower()
@@ -51,25 +67,61 @@ def infer_place(text: str):
     return None, None
 
 
+def infer_target_text(text: str) -> str:
+    lowered = text.lower()
+    for aliases, canonical in TARGET_GROUPS:
+        if any(alias.lower() in lowered for alias in aliases):
+            return canonical
+    patterns = (
+        r'(?:go to|move to|walk to|approach|find|locate|reach|head to|go near|move near)\s+(?:the\s+)?([a-z][a-z0-9 _-]{1,40})',
+        r'(?:去到|到|前往|靠近|找到)([^，。,.\n]{1,12})',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if not match:
+            continue
+        phrase = match.group(1).strip()
+        phrase = re.split(r'\b(and|then|stop)\b|停下|然后|再', phrase)[0].strip()
+        if phrase:
+            return phrase
+    return ''
+
+
 def main():
     parser = argparse.ArgumentParser(description='Publish an OmniVLA task.')
     parser.add_argument('--task', help='Natural-language task, e.g. "去到厨房然后停下来".')
     parser.add_argument('--instruction', default='move toward the goal')
+    parser.add_argument('--target-text', help='Explicit target object or place text for YOLO-World grounding.')
     parser.add_argument('--place', choices=sorted(PLACES.keys()), help='Named place in the Small House world.')
     parser.add_argument('--goal-x', type=float)
     parser.add_argument('--goal-y', type=float)
     parser.add_argument('--goal-yaw', type=float)
     parser.add_argument('--goal-tolerance', type=float, default=0.35)
+    parser.add_argument(
+        '--language-only',
+        action='store_true',
+        help='Use OmniVLA language-only modality: current image + instruction, without pose goal.',
+    )
+    parser.add_argument(
+        '--image-goal',
+        action='store_true',
+        help='Also enable OmniVLA goal-image modality using the launch-configured goal image.',
+    )
     parser.add_argument('--no-stop-at-goal', action='store_true')
     args = parser.parse_args()
 
     instruction = args.task or args.instruction
+    target_text = (args.target_text or infer_target_text(instruction)).strip()
     place_name = args.place
     place_spec = PLACES[place_name] if place_name else None
     if place_spec is None:
         place_name, place_spec = infer_place(instruction)
 
-    if args.goal_x is not None and args.goal_y is not None:
+    if args.language_only:
+        goal_x = 0.0
+        goal_y = 0.0
+        goal_yaw = 0.0
+    elif args.goal_x is not None and args.goal_y is not None:
         goal_x = args.goal_x
         goal_y = args.goal_y
         goal_yaw = args.goal_yaw if args.goal_yaw is not None else 0.0
@@ -79,8 +131,8 @@ def main():
         goal_yaw = place_spec['goal_yaw']
     else:
         raise SystemExit(
-            'No goal was specified. Use --place kitchen, include a known place in --task, '
-            'or pass --goal-x/--goal-y.'
+            'No goal was specified. Use --language-only, use --place kitchen, include a known place '
+            'in --task, or pass --goal-x/--goal-y.'
         )
 
     if not math.isfinite(goal_x) or not math.isfinite(goal_y) or not math.isfinite(goal_yaw):
@@ -95,10 +147,15 @@ def main():
         'goal_y': goal_y,
         'goal_yaw': goal_yaw,
         'goal_tolerance': args.goal_tolerance,
-        'stop_at_goal': not args.no_stop_at_goal,
+        'stop_at_goal': (not args.no_stop_at_goal) and (not args.language_only),
+        'use_pose_goal': not args.language_only,
+        'use_language_goal': True,
+        'use_image_goal': args.image_goal,
     }
     if place_name:
         payload['place'] = place_name
+    if target_text:
+        payload['target_text'] = target_text
     msg = String(data=json.dumps(payload))
     deadline = time.time() + 1.0
     while time.time() < deadline and pub.get_subscription_count() == 0:

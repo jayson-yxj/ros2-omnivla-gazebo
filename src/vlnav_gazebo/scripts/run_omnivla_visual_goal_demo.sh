@@ -20,22 +20,22 @@ set -u
 export VLN_PROJECT_ROOT="${PROJECT_ROOT}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-ros2 launch vlnav_gazebo omnivla_gazebo.launch.py \
+ros2 launch vlnav_gazebo omnivla_visual_goal_gazebo.launch.py \
   gui:="${GUI:-true}" \
-  instruction:="${INSTRUCTION:-move toward the goal}" \
-  goal_x:="${GOAL_X:-2.79818558693}" \
-  goal_y:="${GOAL_Y:--3.52509260178}" \
-  goal_yaw:="${GOAL_YAW:--1.59079641132}" \
-  spawn_x:="${SPAWN_X:-5.18359947205}" \
-  spawn_y:="${SPAWN_Y:-1.49744713306}" \
-  spawn_yaw:="${SPAWN_YAW:-1.32731997641}" \
+  rviz:="${RVIZ:-true}" \
+  instruction:="${INSTRUCTION:-Move to the trash can and then stop}" \
+  target_text:="${TARGET_TEXT:-trash can,trash bin,garbage bin,waste bin,bin}" \
+  detector_hz:="${DETECTOR_HZ:-4.0}" \
+  detector_conf:="${DETECTOR_CONF:-0.005}" \
+  target_min_score:="${TARGET_MIN_SCORE:-0.55}" \
+  target_min_area:="${TARGET_MIN_AREA:-0.005}" \
+  target_only:="${TARGET_ONLY:-true}" \
+  infer_hz:="${INFER_HZ:-1.0}" \
   max_linear:="${MAX_LINEAR:-0.08}" \
   max_angular:="${MAX_ANGULAR:-0.12}" \
-  infer_hz:="${INFER_HZ:-1.0}" \
+  visual_goal_timeout_sec:="${VISUAL_GOAL_TIMEOUT_SEC:-3.0}" \
+  visual_goal_stop_bottom_y:="${VISUAL_GOAL_STOP_BOTTOM_Y:-0.78}" \
   autostart_task:="${AUTOSTART_TASK:-false}" \
-  use_pose_goal:="${USE_POSE_GOAL:-true}" \
-  use_language_goal:="${USE_LANGUAGE_GOAL:-true}" \
-  use_image_goal:="${USE_IMAGE_GOAL:-false}" \
-  rviz:="${RVIZ:-false}" \
-  model_dir:="${OMNIVLA_MODEL_DIR:-${PROJECT_ROOT}/models/omnivla/omnivla-original}" \
+  yolo_model_path:="${YOLO_WORLD_MODEL:-${PROJECT_ROOT}/models/yolov8s-worldv2.pt}" \
+  omnivla_model_dir:="${OMNIVLA_MODEL_DIR:-${PROJECT_ROOT}/models/omnivla/omnivla-original}" \
   "$@"

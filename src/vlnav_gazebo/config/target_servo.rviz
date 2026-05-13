@@ -12,28 +12,11 @@ Visualization Manager:
       Name: TF
     - Class: rviz_default_plugins/Path
       Enabled: true
-      Name: Executed Path
+      Name: Target Servo Executed Path
       Topic:
-        Value: /vl_nav/omnivla/executed_path
+        Value: /vl_nav/target_servo/executed_path
       Color: 25; 255; 0
       Line Width: 0.04
-    - Class: rviz_default_plugins/Path
-      Enabled: true
-      Name: Predicted Path
-      Topic:
-        Value: /vl_nav/omnivla/predicted_path
-      Color: 0; 170; 255
-      Line Width: 0.06
-    - Class: rviz_default_plugins/Marker
-      Enabled: true
-      Name: Predicted Path Marker
-      Marker Topic:
-        Value: /vl_nav/omnivla/predicted_path_marker
-    - Class: rviz_default_plugins/Image
-      Enabled: true
-      Name: Annotated Image
-      Topic:
-        Value: /vl_nav/omnivla/annotated_image
     - Class: rviz_default_plugins/Image
       Enabled: true
       Name: YOLO Annotated Image
